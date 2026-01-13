@@ -70,19 +70,32 @@ class RoadMatcher:
         try:
             ids = self.table["segment_id"].to_pylist()
             wkbs = self.table["geometry_wkb"].to_pylist()
+            # Get classes for filtering
+            classes = self.table["class"].to_pylist() if "class" in self.table.column_names else ["unknown"] * len(ids)
         except Exception:
             # Handle potential column name mismatch? (Schema assumed correct from debug_matching success)
             ids = self.table["id"].to_pylist() if "id" in self.table.column_names else []
             wkbs = self.table["geometry"].to_pylist() if "geometry" in self.table.column_names else []
+            classes = ["unknown"] * len(ids)
 
         valid_geoms = []
         valid_ids = []
+        
+        # Filter out non-drivable roads to save memory (critical for Railway Starter tier)
+        # Excludes: footway, steps, cycleway, path, pedestrian, track, service
+        EXCLUDED_CLASSES = {
+            "footway", "steps", "cycleway", "path", "pedestrian", "track", "service", "bridleway"
+        }
 
         # Parse geometries (SLOW but necessary for Index)
         # We can't avoid Shapely objects in memory for STRtree
         count = len(ids)
         for i in range(count):
             try:
+                # Check class before expensive WKB load
+                if classes[i] in EXCLUDED_CLASSES:
+                    continue
+                    
                 g = wkb.loads(wkbs[i])
                 if isinstance(g, LineString):
                     valid_geoms.append(g)
