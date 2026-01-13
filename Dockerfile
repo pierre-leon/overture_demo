@@ -26,4 +26,5 @@ EXPOSE 8000
 
 # Run from server directory
 WORKDIR /app/server
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use shell form to expand environment variable
+CMD sh -c "python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"
