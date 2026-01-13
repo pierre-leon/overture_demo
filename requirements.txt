@@ -1,0 +1,19 @@
+# Python core
+duckdb
+shapely
+folium
+pyarrow
+geopandas
+pandas
+pyproj
+
+# Server
+fastapi
+uvicorn[standard]
+websockets
+orjson
+
+# Testing
+pytest
+pytest-asyncio
+httpx
