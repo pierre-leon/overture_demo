@@ -39,11 +39,21 @@ class RoadMatcher:
     
     def __init__(self, roads_path: str, radius_m: float = 50.0):
         self.radius_m = radius_m
-        self.segments: dict[str, RoadSegment] = {}
         self.tree: Optional[STRtree] = None
-        self.geom_to_id: dict[int, str] = {}
         
-        # Transformer for WGS84 to metric (Web Mercator for distance calc)
+        # Kept in memory but efficient (Arrow Table)
+        self.table: Optional[pq.File] = None
+        
+        # Lists for STRtree index (geometry objects must be kept alive)
+        self.geometries = []
+        self.segment_ids = []
+        
+        # Map segment_id string -> integer index in self.geometries
+        self.id_to_index = {}
+        # Map valid geometry index -> original table row index
+        self.valid_to_table_index = []
+        
+        # Transformer for WGS84 to metric (Web Mercator for distance call)
         self.to_metric = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
         self.to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
         
@@ -52,38 +62,46 @@ class RoadMatcher:
     
     def _load_roads(self, roads_path: str) -> None:
         """Load road segments from parquet file."""
-        table = pq.read_table(roads_path)
+        # Read the whole table into memory - PyArrow is RAM efficient
+        print(f"Loading roads from {roads_path}...")
+        self.table = pq.read_table(roads_path)
         
-        for i in range(len(table)):
-            segment_id = str(table["segment_id"][i].as_py())
-            geometry_wkb_bytes = table["geometry_wkb"][i].as_py()
-            
+        # Pre-process columns to avoid overhead during loop
+        try:
+            ids = self.table["segment_id"].to_pylist()
+            wkbs = self.table["geometry_wkb"].to_pylist()
+        except Exception:
+            # Handle potential column name mismatch? (Schema assumed correct from debug_matching success)
+            ids = self.table["id"].to_pylist() if "id" in self.table.column_names else []
+            wkbs = self.table["geometry"].to_pylist() if "geometry" in self.table.column_names else []
+
+        valid_geoms = []
+        valid_ids = []
+
+        # Parse geometries (SLOW but necessary for Index)
+        # We can't avoid Shapely objects in memory for STRtree
+        count = len(ids)
+        for i in range(count):
             try:
-                geom = wkb.loads(geometry_wkb_bytes)
-                if not isinstance(geom, LineString):
-                    continue
+                g = wkb.loads(wkbs[i])
+                if isinstance(g, LineString):
+                    valid_geoms.append(g)
+                    valid_ids.append(str(ids[i]))
+                    self.id_to_index[str(ids[i])] = len(valid_geoms) - 1
+                    self.valid_to_table_index.append(i)
             except Exception:
                 continue
-            
-            self.segments[segment_id] = RoadSegment(
-                segment_id=segment_id,
-                geometry=geom,
-                name=table["name"][i].as_py() if "name" in table.column_names else None,
-                road_class=table["class"][i].as_py() if "class" in table.column_names else None,
-                subclass=table["subclass"][i].as_py() if "subclass" in table.column_names else None,
-                geometry_wkb=geometry_wkb_bytes,
-            )
+
+        self.geometries = valid_geoms
+        self.segment_ids = valid_ids
+        print(f"Parsed {len(self.geometries)} valid road segments")
     
     def _build_index(self) -> None:
         """Build STRtree spatial index over road geometries."""
-        # Keep lists in sync for index lookup
-        self.geometries = []
-        self.segment_ids = []
-        
-        for seg_id, segment in self.segments.items():
-            self.geometries.append(segment.geometry)
-            self.segment_ids.append(seg_id)
-        
+        if not self.geometries:
+            print("Warning: No geometries to index!")
+            return
+            
         self.tree = STRtree(self.geometries)
         print(f"Built spatial index with {len(self.geometries)} road segments")
     
@@ -120,7 +138,45 @@ class RoadMatcher:
             diff = 360 - diff
         
         return "fwd" if diff <= 90 else "rev"
-    
+
+    def _create_segment_object(self, index: int) -> RoadSegment:
+        """Lazy load attributes from Arrow table only when needed."""
+        seg_id = self.segment_ids[index]
+        geometry = self.geometries[index] # Already in memory
+        
+        # Fetch attributes from arrow table row (fast lookup)
+        # We need to map the 'index' from valid_ids back to original table index?
+        # WAIT. We filtered items.
+        # Simple solution: self.segments was handling this.
+        # Now we need to query the TABLE. But indices mismatch if we skipped invalid geoms.
+        
+        # To strictly save memory, we shouldn't store a mapping of "valid_idx -> table_idx" (another int array).
+        # Actually that costs very little (250k ints = 1MB).
+        # OR:
+        # Since 99.9% are valid, let's assume valid_idx maps fairly well?
+        # No, that's risky.
+        
+        # ALTERNATIVE: Just store the attributes in simple python lists (tuples) instead of heavy objects.
+        # 250k string tuples is cheaper than 250k objects.
+        # BUT self.table is already in memory! Why duplicate strings?
+        
+        # Let's optimize: We assume filtering is rare. 
+        # But we need to look up by ID for 'get_segment'.
+        
+        # Okay, let's just search the table by ID? No, slow.
+        # Let's simple caching: Store `original_index` in `id_to_index`?
+        # `id_to_index` maps ID -> valid_geometry_index. 
+        
+        # We need `valid_geometry_index` -> `table_row_index`.
+        # Let's just create that list during load.
+        return RoadSegment(
+            segment_id=seg_id,
+            geometry=geometry,
+            name=str(self.table["name"][self.valid_to_table_index[index]].as_py()) if "name" in self.table.column_names else None,
+            road_class=str(self.table["class"][self.valid_to_table_index[index]].as_py()) if "class" in self.table.column_names else None,
+            subclass=str(self.table["subclass"][self.valid_to_table_index[index]].as_py()) if "subclass" in self.table.column_names else None
+        )
+
     def match(self, lon: float, lat: float, heading: Optional[float] = None) -> MatchResult:
         """Match a point to the nearest road segment within radius."""
         if self.tree is None:
@@ -173,7 +229,8 @@ class RoadMatcher:
                 "segment_id": seg_id,
                 "distance": distance_m,
                 "snapped": snapped,
-                "aligned": is_aligned
+                "aligned": is_aligned,
+                "index": idx
             })
         
         if not possible_matches:
@@ -182,7 +239,6 @@ class RoadMatcher:
         # Sort by:
         # 1. Alignment (True < False? No, in Python True=1, False=0. We want True first.)
         #    So key should be (not matched["aligned"], matched["distance"])
-        #    False (0) comes before True (1)
         possible_matches.sort(key=lambda x: (not x["aligned"], x["distance"]))
         
         best = possible_matches[0]
@@ -190,13 +246,11 @@ class RoadMatcher:
         best_distance_m = best["distance"]
         best_segment_id = best["segment_id"]
         best_snapped = best["snapped"]
+        best_idx = best["index"]
         
-        # Check if within radius
-        if best_distance_m > self.radius_m or best_segment_id is None:
-            return MatchResult(matched=False)
-        
-        segment = self.segments[best_segment_id]
-        direction = self._choose_direction(segment.geometry, point, heading)
+        # We need the geometry for direction calculation
+        geom = self.geometries[best_idx]
+        direction = self._choose_direction(geom, point, heading)
         
         return MatchResult(
             matched=True,
@@ -210,11 +264,14 @@ class RoadMatcher:
     
     def get_segment(self, segment_id: str) -> Optional[RoadSegment]:
         """Get a segment by ID."""
-        return self.segments.get(segment_id)
+        idx = self.id_to_index.get(segment_id)
+        if idx is None:
+            return None
+        return self._create_segment_object(idx)
     
     def get_segment_geojson(self, segment_id: str) -> Optional[dict]:
         """Get segment as GeoJSON feature."""
-        segment = self.segments.get(segment_id)
+        segment = self.get_segment(segment_id)
         if segment is None:
             return None
         
