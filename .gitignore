@@ -25,7 +25,7 @@ dist/
 .agent/
 
 # Data & Databases
-*.parquet
+# *.parquet (Needed for demo deployment)
 *.geoparquet
 *.db
 *.duckdb
