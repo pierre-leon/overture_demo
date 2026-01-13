@@ -12,9 +12,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code and data
-# We copy data into the image because it's reasonably small (<100MB)
+# Only copy public road data - events are uploaded via UI
 COPY server/ ./server/
-COPY data/ ./data/
+COPY data/overture_roads.parquet ./data/overture_roads.parquet
 
 # Set env vars
 ENV PYTHONPATH=/app

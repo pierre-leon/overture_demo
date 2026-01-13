@@ -12,6 +12,7 @@ fastapi
 uvicorn[standard]
 websockets
 orjson
+python-multipart
 
 # Testing
 pytest

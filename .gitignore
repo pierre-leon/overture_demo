@@ -26,6 +26,7 @@ dist/
 
 # Data & Databases
 # *.parquet (Needed for demo deployment)
+data/events_all.parquet
 *.geoparquet
 *.db
 *.duckdb

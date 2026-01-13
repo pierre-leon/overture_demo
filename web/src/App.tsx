@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, Component, ErrorInfo, ReactNode } from 'react';
+import { useState, useMemo, useCallback, Component, type ErrorInfo, type ReactNode } from 'react';
 import Map from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
 import { DeckGL } from '@deck.gl/react';
@@ -6,6 +6,7 @@ import type { MapViewState } from '@deck.gl/core';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { Controls } from './components/Controls';
+import { UploadControl } from './components/UploadControl';
 import { useRoadworksStream } from './hooks/useRoadworksStream';
 import { useEnforcement } from './hooks/useEnforcement';
 import { createSegmentsLayer } from './layers/segmentsLayer';
@@ -222,6 +223,10 @@ function AppContent() {
           attributionControl={false}
         />
       </DeckGL>
+
+      <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 1000 }}>
+        <UploadControl onUploadSuccess={() => restart()} />
+      </div>
 
       <Controls
         showBasemap={showBasemap}

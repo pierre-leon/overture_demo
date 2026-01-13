@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Optional
 import json
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from io import BytesIO
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pyarrow.parquet as pq
@@ -23,9 +24,9 @@ enforcement_events: list[dict] = []
 config: ServerConfig = ServerConfig.from_env()
 
 
-def load_events(events_path: str, columns: dict) -> tuple[list[dict], list[dict]]:
-    """Load events from parquet and partition into roadworks and enforcement."""
-    table = pq.read_table(events_path)
+def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
+    """Load events from parquet source (path or buffer) and partition."""
+    table = pq.read_table(source)
     
     roadworks = []
     enforcement = []
@@ -93,7 +94,6 @@ async def lifespan(app: FastAPI):
     global matcher, roadworks_events, enforcement_events
     
     roads_path = Path(config.roads_path)
-    events_path = Path(config.events_path)
     
     if not roads_path.exists():
         print(f"Warning: Roads file not found: {roads_path}")
@@ -101,20 +101,9 @@ async def lifespan(app: FastAPI):
     else:
         matcher = RoadMatcher(str(roads_path), radius_m=config.matching.radius_m)
     
-    if not events_path.exists():
-        print(f"Warning: Events file not found: {events_path}")
-    else:
-        columns = {
-            "lon": config.columns.lon,
-            "lat": config.columns.lat,
-            "event_type": config.columns.event_type,
-            "timestamp": config.columns.timestamp,
-            "heading": config.columns.heading,
-            "event_id": config.columns.event_id,
-        }
-        roadworks_events, enforcement_events = load_events(str(events_path), columns)
-        print(f"Loaded {len(roadworks_events)} roadworks events")
-        print(f"Loaded {len(enforcement_events)} enforcement events")
+    # We NO LONGER load events on startup!
+    # User must upload them via POST /upload
+    print(f"Ready. {len(roadworks_events)} events loaded. Waiting for uploads...")
     
     yield
 
@@ -129,6 +118,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.post("/upload")
+async def upload_events(file: UploadFile = File(...)):
+    """Upload new events file."""
+    global roadworks_events, enforcement_events
+    
+    content = await file.read()
+    buffer = BytesIO(content)
+    
+    columns = {
+        "lon": config.columns.lon,
+        "lat": config.columns.lat,
+        "event_type": config.columns.event_type,
+        "timestamp": config.columns.timestamp,
+        "heading": config.columns.heading,
+        "event_id": config.columns.event_id,
+    }
+    
+    try:
+        new_roadworks, new_enforcement = load_events(buffer, columns)
+        
+        # Replace existing events
+        roadworks_events = new_roadworks
+        enforcement_events = new_enforcement
+        
+        return {
+            "status": "ok",
+            "message": f"Loaded {len(roadworks_events)} roadworks events",
+            "roadworks_count": len(roadworks_events),
+            "enforcement_count": len(enforcement_events),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
 
 
 @app.get("/health")
@@ -288,8 +311,12 @@ async def stream_roadworks(
                     current_batch_size = msg.get("batch_size", current_batch_size)
                     current_tick_ms = msg.get("tick_ms", current_tick_ms)
                 elif msg.get("action") == "restart":
+                    # Cancel current stream and restart from beginning
+                    stream_task.cancel()
                     event_idx = 0
                     sent_segments.clear()
+                    # Start new stream task
+                    stream_task = asyncio.create_task(stream_events())
         except WebSocketDisconnect:
             stream_task.cancel()
             
