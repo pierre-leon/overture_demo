@@ -7,9 +7,10 @@ from typing import Optional
 import json
 
 from io import BytesIO
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 import pyarrow.parquet as pq
 import orjson
 
@@ -108,7 +109,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Roadworks Matching Demo", lifespan=lifespan)
+app = FastAPI(
+    title="Roadworks Matching Demo",
+    lifespan=lifespan,
+)
+
+# Custom middleware to log all requests
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        print(f"[REQUEST] {request.method} {request.url.path}", flush=True)
+        try:
+            response = await call_next(request)
+            print(f"[RESPONSE] {request.method} {request.url.path} -> {response.status_code}", flush=True)
+            return response
+        except Exception as e:
+            print(f"[ERROR] {request.method} {request.url.path} -> {type(e).__name__}: {e}", flush=True)
+            raise
+
+app.add_middleware(LoggingMiddleware)
 
 # CORS for frontend
 app.add_middleware(
@@ -125,20 +143,25 @@ async def upload_events(file: UploadFile = File(...)):
     """Upload new events file."""
     global roadworks_events, enforcement_events
 
-    print(f"Received upload request for file: {file.filename}")
+    print(f"[UPLOAD] Received upload request for file: {file.filename}", flush=True)
 
     try:
-        # Read file content
-        content = await file.read()
-        file_size_mb = len(content) / (1024 * 1024)
-        print(f"File size: {file_size_mb:.2f} MB")
+        # Read file content in chunks to avoid memory spike
+        print(f"[UPLOAD] Reading file content...", flush=True)
+        chunks = []
+        while chunk := await file.read(1024 * 1024):  # 1MB chunks
+            chunks.append(chunk)
+        content = b''.join(chunks)
 
-        # Check file size limit (50MB max for Railway starter)
-        if file_size_mb > 50:
+        file_size_mb = len(content) / (1024 * 1024)
+        print(f"[UPLOAD] File size: {file_size_mb:.2f} MB", flush=True)
+
+        # Check file size limit (80MB max to be safe)
+        if file_size_mb > 80:
             print(f"File too large: {file_size_mb:.2f} MB")
             return JSONResponse(
                 status_code=413,
-                content={"error": f"File too large ({file_size_mb:.1f}MB). Maximum size is 50MB."}
+                content={"error": f"File too large ({file_size_mb:.1f}MB). Maximum size is 80MB."}
             )
 
         buffer = BytesIO(content)
