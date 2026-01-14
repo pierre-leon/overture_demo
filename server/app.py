@@ -124,26 +124,43 @@ app.add_middleware(
 async def upload_events(file: UploadFile = File(...)):
     """Upload new events file."""
     global roadworks_events, enforcement_events
-    
-    content = await file.read()
-    buffer = BytesIO(content)
-    
-    columns = {
-        "lon": config.columns.lon,
-        "lat": config.columns.lat,
-        "event_type": config.columns.event_type,
-        "timestamp": config.columns.timestamp,
-        "heading": config.columns.heading,
-        "event_id": config.columns.event_id,
-    }
-    
+
+    print(f"Received upload request for file: {file.filename}")
+
     try:
+        # Read file content
+        content = await file.read()
+        file_size_mb = len(content) / (1024 * 1024)
+        print(f"File size: {file_size_mb:.2f} MB")
+
+        # Check file size limit (50MB max for Railway starter)
+        if file_size_mb > 50:
+            print(f"File too large: {file_size_mb:.2f} MB")
+            return JSONResponse(
+                status_code=413,
+                content={"error": f"File too large ({file_size_mb:.1f}MB). Maximum size is 50MB."}
+            )
+
+        buffer = BytesIO(content)
+
+        columns = {
+            "lon": config.columns.lon,
+            "lat": config.columns.lat,
+            "event_type": config.columns.event_type,
+            "timestamp": config.columns.timestamp,
+            "heading": config.columns.heading,
+            "event_id": config.columns.event_id,
+        }
+
+        print("Loading events from parquet...")
         new_roadworks, new_enforcement = load_events(buffer, columns)
-        
+
         # Replace existing events
         roadworks_events = new_roadworks
         enforcement_events = new_enforcement
-        
+
+        print(f"Successfully loaded {len(roadworks_events)} roadworks events")
+
         return {
             "status": "ok",
             "message": f"Loaded {len(roadworks_events)} roadworks events",
@@ -151,6 +168,9 @@ async def upload_events(file: UploadFile = File(...)):
             "enforcement_count": len(enforcement_events),
         }
     except Exception as e:
+        print(f"Upload error: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(status_code=400, content={"error": str(e)})
 
 
