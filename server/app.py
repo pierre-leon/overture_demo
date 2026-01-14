@@ -27,11 +27,12 @@ config: ServerConfig = ServerConfig.from_env()
 
 def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
     """Load events from parquet source (path or buffer) and partition."""
-    # Read parquet in smaller batches to reduce memory spikes
-    print(f"[LOAD] Reading parquet file...", flush=True)
-    table = pq.read_table(source)
+    print(f"[LOAD] Opening parquet file...", flush=True)
 
-    print(f"[LOAD] Parquet loaded: {len(table)} rows, {len(table.columns)} columns", flush=True)
+    # Use streaming reader to avoid loading entire file into memory at once
+    parquet_file = pq.ParquetFile(source)
+
+    print(f"[LOAD] Parquet metadata: {parquet_file.metadata.num_rows:,} rows, {parquet_file.num_row_groups} row groups", flush=True)
 
     roadworks = []
     enforcement = []
@@ -43,51 +44,60 @@ def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
     heading_col = columns.get("heading", "heading")
     event_id_col = columns.get("event_id", "event_id")
 
-    col_names = table.column_names
+    total_processed = 0
 
-    # Convert to Python lists once (much faster than repeated .as_py() calls)
-    print(f"[LOAD] Converting columns to Python lists...", flush=True)
-    lons = table[lon_col].to_pylist() if lon_col in col_names else [None] * len(table)
-    lats = table[lat_col].to_pylist() if lat_col in col_names else [None] * len(table)
-    event_types = table[event_type_col].to_pylist() if event_type_col in col_names else ["roadworks"] * len(table)
-    timestamps = table[timestamp_col].to_pylist() if timestamp_col in col_names else [None] * len(table)
-    headings = table[heading_col].to_pylist() if heading_col in col_names else [None] * len(table)
-    event_ids = table[event_id_col].to_pylist() if event_id_col in col_names else None
+    # Process parquet file in row groups (streaming) to avoid memory spikes
+    print(f"[LOAD] Processing row groups...", flush=True)
+    for row_group_idx in range(parquet_file.num_row_groups):
+        print(f"[LOAD] Reading row group {row_group_idx + 1}/{parquet_file.num_row_groups}...", flush=True)
 
-    print(f"[LOAD] Processing events...", flush=True)
+        # Read one row group at a time
+        table = parquet_file.read_row_group(row_group_idx)
+        col_names = table.column_names
 
-    for i in range(len(table)):
-        # Skip if missing coordinates
-        if lons[i] is None or lats[i] is None:
-            continue
+        # Convert columns to Python lists for this batch
+        lons = table[lon_col].to_pylist() if lon_col in col_names else [None] * len(table)
+        lats = table[lat_col].to_pylist() if lat_col in col_names else [None] * len(table)
+        event_types = table[event_type_col].to_pylist() if event_type_col in col_names else ["roadworks"] * len(table)
+        timestamps = table[timestamp_col].to_pylist() if timestamp_col in col_names else [None] * len(table)
+        headings = table[heading_col].to_pylist() if heading_col in col_names else [None] * len(table)
+        event_ids = table[event_id_col].to_pylist() if event_id_col in col_names else None
 
-        # Filter to show ONLY Roadworks events as requested
-        if event_types[i] != "Roadworks":
-            continue
+        # Process rows in this batch
+        for i in range(len(table)):
+            # Skip if missing coordinates
+            if lons[i] is None or lats[i] is None:
+                continue
 
-        event = {
-            "lon": lons[i],
-            "lat": lats[i],
-            "event_type": event_types[i],
-            "event_id": event_ids[i] if event_ids else f"evt_{i}",
-        }
+            # Filter to show ONLY Roadworks events as requested
+            if event_types[i] != "Roadworks":
+                continue
 
-        # Add optional fields
-        if timestamps[i] is not None:
-            event["timestamp"] = str(timestamps[i])
+            event = {
+                "lon": lons[i],
+                "lat": lats[i],
+                "event_type": event_types[i],
+                "event_id": event_ids[i] if event_ids else f"evt_{total_processed + i}",
+            }
 
-        if headings[i] is not None:
-            event["heading"] = headings[i]
+            # Add optional fields
+            if timestamps[i] is not None:
+                event["timestamp"] = str(timestamps[i])
 
-        # Partition by event type
-        if event["event_type"] == config.enforcement_type:
-            enforcement.append(event)
-        else:
-            roadworks.append(event)
+            if headings[i] is not None:
+                event["heading"] = headings[i]
 
-        # Progress logging every 10k events
-        if (i + 1) % 10000 == 0:
-            print(f"[LOAD] Processed {i + 1}/{len(table)} events...", flush=True)
+            # Partition by event type
+            if event["event_type"] == config.enforcement_type:
+                enforcement.append(event)
+            else:
+                roadworks.append(event)
+
+        total_processed += len(table)
+        print(f"[LOAD] Processed {total_processed:,} total events so far, {len(roadworks)} roadworks", flush=True)
+
+        # Clear the batch table to free memory
+        del table, lons, lats, event_types, timestamps, headings, event_ids
 
     print(f"[LOAD] Finished: {len(roadworks)} roadworks, {len(enforcement)} enforcement", flush=True)
 
