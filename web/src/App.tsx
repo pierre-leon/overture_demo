@@ -82,7 +82,7 @@ function AppContent() {
     setSpeed: setStreamSpeed,
     error: streamError
   } = useRoadworksStream({
-    serverUrl: 'ws://localhost:8000',
+    serverUrl: 'wss://overturedemo-production.up.railway.app',
     batchSize: 50,
     tickMs: 50,
     autoStart: true,
@@ -90,7 +90,7 @@ function AppContent() {
 
   // Static enforcement data
   const { data: enforcementData, error: enforcementError } = useEnforcement({
-    serverUrl: 'http://localhost:8000',
+    serverUrl: 'https://overturedemo-production.up.railway.app',
   });
 
   // Calculate unmatched count
