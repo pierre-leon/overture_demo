@@ -24,7 +24,7 @@ interface UseEnforcementOptions {
 }
 
 export function useEnforcement(options: UseEnforcementOptions = {}) {
-    const { serverUrl = 'https://overturedemo-production.up.railway.app', autoLoad = true } = options;
+    const { serverUrl = import.meta.env.VITE_API_HTTP_URL || 'http://localhost:8000', autoLoad = true } = options;
 
     const [data, setData] = useState<EnforcementData | null>(null);
     const [isLoading, setIsLoading] = useState(false);

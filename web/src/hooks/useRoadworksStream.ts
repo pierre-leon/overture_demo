@@ -43,7 +43,7 @@ interface UseRoadworksStreamOptions {
 
 export function useRoadworksStream(options: UseRoadworksStreamOptions = {}) {
     const {
-        serverUrl = 'wss://overturedemo-production.up.railway.app',
+        serverUrl = import.meta.env.VITE_API_WS_URL || 'ws://localhost:8000',
         batchSize = 50,
         tickMs = 50,
         autoStart = true,

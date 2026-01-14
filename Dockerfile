@@ -19,7 +19,7 @@ COPY data/overture_roads.parquet ./data/overture_roads.parquet
 # Set env vars
 ENV PYTHONPATH=/app
 ENV ROADS_PATH=/app/data/overture_roads.parquet
-ENV EVENTS_PATH=/app/data/events_all.parquet
+# Events are uploaded via UI, not loaded from file
 
 # Expose port (default for many cloud runners is 8000 or $PORT)
 EXPOSE 8000

@@ -6,7 +6,7 @@ interface UploadControlProps {
     onUploadSuccess?: (data: { roadworks_count: number; enforcement_count: number }) => void;
 }
 
-export function UploadControl({ apiUrl = 'https://overturedemo-production.up.railway.app', onUploadSuccess }: UploadControlProps) {
+export function UploadControl({ apiUrl = import.meta.env.VITE_API_HTTP_URL || 'http://localhost:8000', onUploadSuccess }: UploadControlProps) {
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);

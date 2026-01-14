@@ -154,6 +154,12 @@ async def upload_events(file: UploadFile = File(...)):
         return JSONResponse(status_code=400, content={"error": str(e)})
 
 
+@app.get("/")
+async def root():
+    """Root endpoint for Railway health checks."""
+    return {"status": "ok", "service": "roadworks-matching-api"}
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
@@ -216,7 +222,17 @@ async def stream_roadworks(
         # Start streaming task
         async def stream_events():
             nonlocal event_idx, paused, current_batch_size, current_tick_ms
-            
+
+            # Handle empty events case
+            if len(roadworks_events) == 0:
+                await websocket.send_bytes(orjson.dumps({
+                    "type": "complete",
+                    "total_events": 0,
+                    "total_segments": 0,
+                    "message": "No events loaded. Please upload a file."
+                }))
+                return
+
             while event_idx < len(roadworks_events):
                 if paused:
                     await asyncio.sleep(0.1)

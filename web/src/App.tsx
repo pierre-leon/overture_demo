@@ -82,16 +82,13 @@ function AppContent() {
     setSpeed: setStreamSpeed,
     error: streamError
   } = useRoadworksStream({
-    serverUrl: 'wss://overturedemo-production.up.railway.app',
     batchSize: 50,
     tickMs: 50,
     autoStart: true,
   });
 
   // Static enforcement data
-  const { data: enforcementData, error: enforcementError } = useEnforcement({
-    serverUrl: 'https://overturedemo-production.up.railway.app',
-  });
+  const { data: enforcementData, error: enforcementError } = useEnforcement();
 
   // Calculate unmatched count
   const unmatchedCount = useMemo(
