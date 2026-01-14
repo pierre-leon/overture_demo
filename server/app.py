@@ -146,22 +146,29 @@ async def upload_events(file: UploadFile = File(...)):
     print(f"[UPLOAD] Received upload request for file: {file.filename}", flush=True)
 
     try:
-        # Stream file directly to BytesIO to avoid memory spike from joining chunks
-        print(f"[UPLOAD] Streaming file content...", flush=True)
-        buffer = BytesIO()
-        bytes_read = 0
+        # Write to temp file to avoid memory issues
+        import tempfile
+        import os
 
-        while chunk := await file.read(1024 * 1024):  # 1MB chunks
-            buffer.write(chunk)
-            bytes_read += len(chunk)
+        print(f"[UPLOAD] Writing to temp file...", flush=True)
 
-        buffer.seek(0)  # Reset to beginning for reading
+        # Create temp file
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.parquet') as tmp:
+            temp_path = tmp.name
+            bytes_read = 0
+
+            # Stream chunks directly to disk
+            while chunk := await file.read(1024 * 1024):  # 1MB chunks
+                tmp.write(chunk)
+                bytes_read += len(chunk)
+
         file_size_mb = bytes_read / (1024 * 1024)
-        print(f"[UPLOAD] File size: {file_size_mb:.2f} MB", flush=True)
+        print(f"[UPLOAD] File size: {file_size_mb:.2f} MB (saved to temp)", flush=True)
 
-        # Check file size limit (80MB max to be safe)
+        # Check file size limit
         if file_size_mb > 80:
-            print(f"File too large: {file_size_mb:.2f} MB")
+            os.unlink(temp_path)
+            print(f"[UPLOAD] File too large: {file_size_mb:.2f} MB", flush=True)
             return JSONResponse(
                 status_code=413,
                 content={"error": f"File too large ({file_size_mb:.1f}MB). Maximum size is 80MB."}
@@ -176,8 +183,12 @@ async def upload_events(file: UploadFile = File(...)):
             "event_id": config.columns.event_id,
         }
 
-        print("Loading events from parquet...")
-        new_roadworks, new_enforcement = load_events(buffer, columns)
+        print(f"[UPLOAD] Loading events from parquet file...", flush=True)
+        new_roadworks, new_enforcement = load_events(temp_path, columns)
+
+        # Clean up temp file
+        os.unlink(temp_path)
+        print(f"[UPLOAD] Temp file cleaned up", flush=True)
 
         # Replace existing events
         roadworks_events = new_roadworks
