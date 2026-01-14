@@ -26,5 +26,8 @@ EXPOSE 8000
 
 # Run from server directory
 WORKDIR /app/server
-# Use shell form to expand environment variable
-CMD sh -c "python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"
+
+# Create a startup script to handle PORT variable
+RUN echo '#!/bin/sh\nexec python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}' > /start.sh && chmod +x /start.sh
+
+CMD ["/start.sh"]
