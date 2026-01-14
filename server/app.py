@@ -146,14 +146,17 @@ async def upload_events(file: UploadFile = File(...)):
     print(f"[UPLOAD] Received upload request for file: {file.filename}", flush=True)
 
     try:
-        # Read file content in chunks to avoid memory spike
-        print(f"[UPLOAD] Reading file content...", flush=True)
-        chunks = []
-        while chunk := await file.read(1024 * 1024):  # 1MB chunks
-            chunks.append(chunk)
-        content = b''.join(chunks)
+        # Stream file directly to BytesIO to avoid memory spike from joining chunks
+        print(f"[UPLOAD] Streaming file content...", flush=True)
+        buffer = BytesIO()
+        bytes_read = 0
 
-        file_size_mb = len(content) / (1024 * 1024)
+        while chunk := await file.read(1024 * 1024):  # 1MB chunks
+            buffer.write(chunk)
+            bytes_read += len(chunk)
+
+        buffer.seek(0)  # Reset to beginning for reading
+        file_size_mb = bytes_read / (1024 * 1024)
         print(f"[UPLOAD] File size: {file_size_mb:.2f} MB", flush=True)
 
         # Check file size limit (80MB max to be safe)
@@ -163,8 +166,6 @@ async def upload_events(file: UploadFile = File(...)):
                 status_code=413,
                 content={"error": f"File too large ({file_size_mb:.1f}MB). Maximum size is 80MB."}
             )
-
-        buffer = BytesIO(content)
 
         columns = {
             "lon": config.columns.lon,
