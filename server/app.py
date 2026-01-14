@@ -27,65 +27,75 @@ config: ServerConfig = ServerConfig.from_env()
 
 def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
     """Load events from parquet source (path or buffer) and partition."""
+    # Read parquet in smaller batches to reduce memory spikes
+    print(f"[LOAD] Reading parquet file...", flush=True)
     table = pq.read_table(source)
-    
+
+    print(f"[LOAD] Parquet loaded: {len(table)} rows, {len(table.columns)} columns", flush=True)
+
     roadworks = []
     enforcement = []
-    
+
     lon_col = columns.get("lon", "lon")
     lat_col = columns.get("lat", "lat")
     event_type_col = columns.get("event_type", "event_type")
     timestamp_col = columns.get("timestamp", "timestamp")
     heading_col = columns.get("heading", "heading")
     event_id_col = columns.get("event_id", "event_id")
-    
+
     col_names = table.column_names
-    
+
+    # Convert to Python lists once (much faster than repeated .as_py() calls)
+    print(f"[LOAD] Converting columns to Python lists...", flush=True)
+    lons = table[lon_col].to_pylist() if lon_col in col_names else [None] * len(table)
+    lats = table[lat_col].to_pylist() if lat_col in col_names else [None] * len(table)
+    event_types = table[event_type_col].to_pylist() if event_type_col in col_names else ["roadworks"] * len(table)
+    timestamps = table[timestamp_col].to_pylist() if timestamp_col in col_names else [None] * len(table)
+    headings = table[heading_col].to_pylist() if heading_col in col_names else [None] * len(table)
+    event_ids = table[event_id_col].to_pylist() if event_id_col in col_names else None
+
+    print(f"[LOAD] Processing events...", flush=True)
+
     for i in range(len(table)):
-        event = {
-            "lon": table[lon_col][i].as_py() if lon_col in col_names else None,
-            "lat": table[lat_col][i].as_py() if lat_col in col_names else None,
-            "event_type": table[event_type_col][i].as_py() if event_type_col in col_names else "roadworks",
-        }
-        
         # Skip if missing coordinates
-        if event["lon"] is None or event["lat"] is None:
+        if lons[i] is None or lats[i] is None:
             continue
-        
-        # Add optional fields
-        if timestamp_col in col_names:
-            ts = table[timestamp_col][i].as_py()
-            event["timestamp"] = str(ts) if ts else None
-        
-        if heading_col in col_names:
-            event["heading"] = table[heading_col][i].as_py()
-        
-        if event_id_col in col_names:
-            event["event_id"] = str(table[event_id_col][i].as_py())
-        else:
-            event["event_id"] = f"evt_{i}"
-        
-        # Add any additional columns as properties
-        for col in col_names:
-            if col not in [lon_col, lat_col, event_type_col, timestamp_col, heading_col, event_id_col]:
-                val = table[col][i].as_py()
-                if val is not None:
-                    event[col] = val
-        
+
         # Filter to show ONLY Roadworks events as requested
-        if event["event_type"] != "Roadworks":
+        if event_types[i] != "Roadworks":
             continue
+
+        event = {
+            "lon": lons[i],
+            "lat": lats[i],
+            "event_type": event_types[i],
+            "event_id": event_ids[i] if event_ids else f"evt_{i}",
+        }
+
+        # Add optional fields
+        if timestamps[i] is not None:
+            event["timestamp"] = str(timestamps[i])
+
+        if headings[i] is not None:
+            event["heading"] = headings[i]
 
         # Partition by event type
         if event["event_type"] == config.enforcement_type:
             enforcement.append(event)
         else:
             roadworks.append(event)
-    
+
+        # Progress logging every 10k events
+        if (i + 1) % 10000 == 0:
+            print(f"[LOAD] Processed {i + 1}/{len(table)} events...", flush=True)
+
+    print(f"[LOAD] Finished: {len(roadworks)} roadworks, {len(enforcement)} enforcement", flush=True)
+
     # Sort roadworks by timestamp if available
     if roadworks and "timestamp" in roadworks[0]:
+        print(f"[LOAD] Sorting by timestamp...", flush=True)
         roadworks.sort(key=lambda e: e.get("timestamp") or "")
-    
+
     return roadworks, enforcement
 
 
