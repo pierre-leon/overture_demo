@@ -24,10 +24,7 @@ interface UseEnforcementOptions {
 }
 
 export function useEnforcement(options: UseEnforcementOptions = {}) {
-    const apiUrl = import.meta.env.VITE_API_URL || 'ws://localhost:8000';
-    // Convert WebSocket URL to HTTP for REST endpoint
-    const httpUrl = apiUrl.replace(/^wss?:\/\//, 'https://').replace(':8000', '');
-    const { serverUrl = httpUrl, autoLoad = true } = options;
+    const { serverUrl = 'https://overturedemo-production.up.railway.app', autoLoad = true } = options;
 
     const [data, setData] = useState<EnforcementData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
