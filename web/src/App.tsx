@@ -8,10 +8,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Controls } from './components/Controls';
 import { UploadControl } from './components/UploadControl';
 import { useRoadworksStream } from './hooks/useRoadworksStream';
-import { useEnforcement } from './hooks/useEnforcement';
 import { createSegmentsLayer } from './layers/segmentsLayer';
 import { createRoadworksLayer } from './layers/roadworksLayer';
-import { createEnforcementLayer } from './layers/enforcementLayer';
 
 import './App.css';
 
@@ -87,9 +85,6 @@ function AppContent() {
     autoStart: true,
   });
 
-  // Static enforcement data
-  const { data: enforcementData, error: enforcementError } = useEnforcement();
-
   // Calculate unmatched count
   const unmatchedCount = useMemo(
     () => events.filter((e) => !e.matched).length,
@@ -122,9 +117,8 @@ function AppContent() {
     () => [
       createSegmentsLayer(segments, { visible: true }),
       createRoadworksLayer(events, { visible: true }),
-      createEnforcementLayer(enforcementData, { visible: true }),
     ],
-    [segments, events, enforcementData]
+    [segments, events]
   );
 
   // Auto-fit view to first segment when data arrives
@@ -143,22 +137,7 @@ function AppContent() {
 
   return (
     <div className="app">
-      {(!MAP_STYLE && showBasemap) && (
-        <div style={{
-          position: 'absolute',
-          top: 10,
-          right: 10,
-          background: 'rgba(255,0,0,0.7)',
-          color: 'white',
-          padding: 10,
-          borderRadius: 4,
-          zIndex: 9999
-        }}>
-          Warning: VITE_MAPBOX_TOKEN not set. Basemap will be blank.
-        </div>
-      )}
-
-      {(streamError || enforcementError) && (
+      {streamError && (
         <div style={{
           position: 'absolute',
           bottom: 10,
@@ -169,7 +148,7 @@ function AppContent() {
           borderRadius: 4,
           zIndex: 9999
         }}>
-          Error: {streamError || enforcementError}
+          Error: {streamError}
         </div>
       )}
 

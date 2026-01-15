@@ -21,12 +21,11 @@ from matching import RoadMatcher
 # Global state
 matcher: Optional[RoadMatcher] = None
 roadworks_events: list[dict] = []
-enforcement_events: list[dict] = []
 config: ServerConfig = ServerConfig.from_env()
 
 
-def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
-    """Load events from parquet source (path or buffer) and partition."""
+def load_events(source, columns: dict) -> list[dict]:
+    """Load events from parquet source."""
     print(f"[LOAD] Opening parquet file...", flush=True)
 
     # Use streaming reader to avoid loading entire file into memory at once
@@ -35,7 +34,6 @@ def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
     print(f"[LOAD] Parquet metadata: {parquet_file.metadata.num_rows:,} rows, {parquet_file.num_row_groups} row groups", flush=True)
 
     roadworks = []
-    enforcement = []
 
     lon_col = columns.get("lon", "lon")
     lat_col = columns.get("lat", "lat")
@@ -87,26 +85,22 @@ def load_events(source, columns: dict) -> tuple[list[dict], list[dict]]:
             if headings[i] is not None:
                 event["heading"] = headings[i]
 
-            # Partition by event type
-            if event["event_type"] == config.enforcement_type:
-                enforcement.append(event)
-            else:
-                roadworks.append(event)
+            roadworks.append(event)
 
         total_processed += len(table)
-        print(f"[LOAD] Processed {total_processed:,} total events so far, {len(roadworks)} roadworks", flush=True)
+        print(f"[LOAD] Processed {total_processed:,} total events, {len(roadworks)} roadworks", flush=True)
 
         # Clear the batch table to free memory
         del table, lons, lats, event_types, timestamps, headings, event_ids
 
-    print(f"[LOAD] Finished: {len(roadworks)} roadworks, {len(enforcement)} enforcement", flush=True)
+    print(f"[LOAD] Finished: {len(roadworks)} roadworks events", flush=True)
 
     # Sort roadworks by timestamp if available
     if roadworks and "timestamp" in roadworks[0]:
         print(f"[LOAD] Sorting by timestamp...", flush=True)
         roadworks.sort(key=lambda e: e.get("timestamp") or "")
 
-    return roadworks, enforcement
+    return roadworks
 
 
 @asynccontextmanager
@@ -122,8 +116,7 @@ async def lifespan(app: FastAPI):
     else:
         matcher = RoadMatcher(str(roads_path), radius_m=config.matching.radius_m)
     
-    # We NO LONGER load events on startup!
-    # User must upload them via POST /upload
+    # Events are uploaded via POST /upload
     print(f"Ready. {len(roadworks_events)} events loaded. Waiting for uploads...")
     
     yield
@@ -161,7 +154,7 @@ app.add_middleware(
 @app.post("/upload")
 async def upload_events(file: UploadFile = File(...)):
     """Upload new events file."""
-    global roadworks_events, enforcement_events
+    global roadworks_events
 
     print(f"[UPLOAD] Received upload request for file: {file.filename}", flush=True)
 
@@ -204,15 +197,11 @@ async def upload_events(file: UploadFile = File(...)):
         }
 
         print(f"[UPLOAD] Loading events from parquet file...", flush=True)
-        new_roadworks, new_enforcement = load_events(temp_path, columns)
+        roadworks_events = load_events(temp_path, columns)
 
         # Clean up temp file
         os.unlink(temp_path)
         print(f"[UPLOAD] Temp file cleaned up", flush=True)
-
-        # Replace existing events
-        roadworks_events = new_roadworks
-        enforcement_events = new_enforcement
 
         print(f"Successfully loaded {len(roadworks_events)} roadworks events")
 
@@ -220,7 +209,6 @@ async def upload_events(file: UploadFile = File(...)):
             "status": "ok",
             "message": f"Loaded {len(roadworks_events)} roadworks events",
             "roadworks_count": len(roadworks_events),
-            "enforcement_count": len(enforcement_events),
         }
     except Exception as e:
         print(f"Upload error: {type(e).__name__}: {str(e)}")
@@ -242,35 +230,7 @@ async def health():
         "status": "ok",
         "roads_loaded": matcher is not None,
         "roadworks_count": len(roadworks_events),
-        "enforcement_count": len(enforcement_events),
     }
-
-
-@app.get("/enforcement.geojson")
-async def get_enforcement():
-    """Return enforcement events as GeoJSON."""
-    features = []
-    
-    for event in enforcement_events:
-        feature = {
-            "type": "Feature",
-            "properties": {k: v for k, v in event.items() if k not in ["lon", "lat"]},
-            "geometry": {
-                "type": "Point",
-                "coordinates": [event["lon"], event["lat"]],
-            },
-        }
-        features.append(feature)
-    
-    geojson = {
-        "type": "FeatureCollection",
-        "features": features,
-    }
-    
-    return JSONResponse(
-        content=geojson,
-        media_type="application/geo+json",
-    )
 
 
 @app.websocket("/stream/roadworks")

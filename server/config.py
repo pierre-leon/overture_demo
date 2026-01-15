@@ -29,12 +29,7 @@ class ServerConfig:
     roads_path: str = "data/overture_roads.parquet"
     columns: ColumnMapping = field(default_factory=ColumnMapping)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
-    
-    # Event type values for filtering
-    # Set to None to stream all events (when data doesn't have separate roadworks/enforcement)
-    roadworks_type: str = None  # Stream all events as "roadworks"
-    enforcement_type: str = None  # No separate enforcement layer
-    
+
     @classmethod
     def from_env(cls) -> "ServerConfig":
         """Load config from environment variables with defaults."""
@@ -56,9 +51,6 @@ class ServerConfig:
                 heading=os.getenv("COL_HEADING", "ego_heading"),
                 event_id=os.getenv("COL_EVENT_ID", "event_id"),
             ),
-            # Data only has enforcement events, so we treat them all as streamable
-            roadworks_type=None,
-            enforcement_type=None,
             matching=MatchingConfig(
                 radius_m=float(os.getenv("MATCH_RADIUS_M", "50")),
                 batch_size=int(os.getenv("BATCH_SIZE", "50")),
